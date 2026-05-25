@@ -63,6 +63,45 @@
 - Windows: Named pipe (`\\.\pipe\claude-mux`)
 - 프로토콜: JSON-RPC 2.0 (요청-응답 + 알림)
 
+## 세션 동작 모델 (핵심)
+
+### 모드
+세션 생성 시 `mode` 지정. 데몬이 첫 메시지로 system prompt 자동 주입.
+
+| 모드 | 동작 | 사용처 |
+|---|---|---|
+| `automation` | 반문 금지, 단답, 진행 narration 없음, 막히면 `MUX_BLOCKED: <reason>` | 자동화 호출 (옵티마이저, watchdog) |
+| `chat` | 자유로운 대화, 반문 허용 | Council 회의실 (사람들이 답함) |
+| `streaming` | 청크 출력, 반문 허용 | 채팅 UI (SSE 등) |
+
+자동 주입되는 system context 예시 (`automation`):
+```
+You are being called programmatically by '<invoker>', not by a human.
+- Do NOT ask clarifying questions — make best assumption and proceed
+- Do NOT narrate progress — final answer only
+- If genuinely impossible, respond with literal "MUX_BLOCKED: <reason>"
+- Output is parsed by a machine. No emoji, no markdown unless asked.
+- Allowed tools: <comma-separated or "none">
+```
+
+### 메시지 큐 (세션당 직렬)
+- 같은 세션에 N개 메시지 동시 도착 → 큐 → 응답 끝나면 다음
+- 응답 끝 감지: TUI 프롬프트 마커(`❯`) 재출현 (idle 타이머는 fallback)
+- 큐 길이 상한 (예: 100) → 초과 시 백프레셔(reject)
+- 타임아웃 시 `Ctrl+C` 주입 → 큐의 다음 메시지로
+- 우선순위 옵션 (host > guest 등)
+
+### 응답 완료 신호 우선순위
+1. TUI 프롬프트 마커 재출현 (가장 신뢰)
+2. 사용량 카운터 라인 갱신 ("5시간:X% / 7일:Y%")
+3. idle N초 (fallback)
+
+### 표준 약속어
+| 토큰 | 의미 | 처리 |
+|---|---|---|
+| `MUX_BLOCKED: <reason>` | Claude가 진행 불가 판단 | 클라이언트 호출에 throw |
+| `MUX_NEEDS_INPUT` | (chat 모드 전용) 반문 필요 | 다음 send() 대기 |
+
 ## Drop-in 호환 설계 (핵심 가치)
 
 기존 앱(currency-edge, vidfolio)도, 미래 앱(Council 등)도 **최소 변경**으로 붙일 수 있어야 한다.
