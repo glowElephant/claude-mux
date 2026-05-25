@@ -9,4 +9,5 @@
  */
 
 export * from "./core/index.js";
-// bridge/runner는 채워지는 대로 export
+export * as bridge from "./bridge/index.js";
+// runner는 채워지는 대로 export

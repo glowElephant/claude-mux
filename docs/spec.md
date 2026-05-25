@@ -63,6 +63,27 @@
 - Windows: Named pipe (`\\.\pipe\claude-mux`)
 - 프로토콜: JSON-RPC 2.0 (요청-응답 + 알림)
 
+## 운영 가정 (Operating envelope)
+
+PTY 인터랙티브는 본질적으로 **사람 속도** 인터페이스다. claude TUI 1개를
+사람 1명이 사용하는 것과 동일한 부하 패턴을 가정한다.
+
+지원 시나리오:
+- 메시지 도착 → 새 세션 spawn → 응답 → close (Bridge.ask)
+- 한 세션에 연속 N개 메시지 직렬 처리 (Session.send 반복)
+- cron 트리거 (10분/시간/일 단위)
+- 사용자 입력 폴링 (수 초 간격)
+
+**비지원 (또는 best-effort)**:
+- 같은 PC에서 1초에 N개 PTY 동시 spawn (claude CLI/ConPTY 자원 충돌)
+- 한 세션에 메시지 동시 전송 (큐로 직렬화하지만 호출자가 굳이 폭주시킬 일 없음)
+- 부하 테스트 / 벤치마크 패턴
+
+데몬 단에서 enforce할 정책 (v0.1.1+):
+- `maxConcurrentSpawns` (예: 3)
+- `minSpawnIntervalMs` (예: 1500) — 직전 spawn 후 N ms 안에 새 spawn 거부/대기
+- `maxSessions` (예: 50) + LRU eviction
+
 ## 세션 동작 모델 (핵심)
 
 ### 모드
