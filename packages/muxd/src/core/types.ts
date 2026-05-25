@@ -4,6 +4,44 @@
 
 export type SessionMode = "automation" | "chat" | "streaming";
 
+/**
+ * 세션 트리거 — 호출 의도를 처음부터 선언.
+ *  - on-demand: 외부 메시지 도착마다 send (Bridge 패턴 A — 봇 응답)
+ *  - scheduled: cron 표현식대로 자동 실행 (Runner 패턴 B — 옵티마이저)
+ *  - loop: 고정 interval 루프 (Runner 패턴 B — watchdog polling)
+ */
+export type TriggerKind = "on-demand" | "scheduled" | "loop";
+
+/** 요일 (cron 호환: 0=일, 1=월, ..., 6=토) */
+export type Weekday = 0 | 1 | 2 | 3 | 4 | 5 | 6;
+
+/**
+ * 스케줄 정책 — Runner 세션 생성 시 사용.
+ * cron 한 줄로도 다 표현되지만, 자주 쓰는 패턴은 친절한 옵션 제공.
+ * 둘 다 지정되면 cron 우선, 나머지 필드는 skip 조건으로 작용.
+ */
+export interface SchedulePolicy {
+  /** Cron 표현식 (예: every 10 min on weekdays 9-15h) — 가장 표현력 높음 */
+  cron?: string;
+
+  /** 또는: 간단 옵션 (cron 없을 때) */
+  /** 매일 실행할 시각들. "HH:mm" 24h. 예: ["09:00", "15:30"] */
+  atTimes?: string[];
+  /** 간격 (ms). loop 트리거의 기본 표현 */
+  intervalMs?: number;
+
+  /** 공통 skip 조건 (cron/interval 모두에 적용) */
+  /** 실행 허용 요일. 미지정 시 매일 */
+  onWeekdays?: Weekday[];
+  /** 이 시간대에는 건너뜀. "HH:mm-HH:mm" 형식. 예: ["00:00-07:00", "23:00-24:00"] */
+  skipTimeRanges?: string[];
+  /** 이 날짜에는 건너뜀. ISO date (YYYY-MM-DD). 휴일 등 */
+  skipDates?: string[];
+
+  /** 타임존 (예: "Asia/Seoul"). 기본 시스템 TZ */
+  timezone?: string;
+}
+
 export interface OpenSessionOpts {
   /** 세션 작업 디렉토리 (claude CLI cwd) */
   cwd: string;

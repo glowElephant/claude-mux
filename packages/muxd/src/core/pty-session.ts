@@ -22,11 +22,8 @@ import { EventEmitter } from "node:events";
 import { locateClaude } from "./locate-claude.js";
 import { buildSystemPrompt } from "./system-prompt.js";
 import { encodeForPty, INTERRUPT_ESC, INTERRUPT_CTRL_C } from "./input-encoder.js";
-import {
-  extractAssistantText,
-  parseFrame,
-  type UsageSnapshot,
-} from "./tui-parser.js";
+import { parseFrame, type UsageSnapshot } from "./tui-parser.js";
+import { SessionTail, type JsonlMessage } from "./session-tail.js";
 import type { OpenSessionOpts, SessionInfo, SessionMode } from "./types.js";
 
 interface QueueItem {
@@ -53,10 +50,6 @@ export interface PtySessionEvents {
   usage: (u: UsageSnapshot) => void;
 }
 
-/** 응답 완료 판단 idle (ms) — ❯ 마커와 AND 조건 */
-const IDLE_DONE_MS = 1500;
-/** ❯ 마커가 안 떠도 fallback으로 완료 처리할 idle (ms) */
-const IDLE_FALLBACK_MS = 8_000;
 /** 활동 없는 채로 이 시간 지나면 죽었다고 판정 (기본값) */
 const DEFAULT_IDLE_DEATH_MS = 60_000;
 /** TUI 부팅 ready 감지 타임아웃 */
@@ -73,14 +66,18 @@ export class PtySession extends EventEmitter {
   lastUsedAt: number;
 
   private proc: pty.IPty;
-  private buffer = ""; // 응답 진행 중 누적
-  private allOutput = ""; // 디버그 / 사용량 파싱용 전체
+  private buffer = ""; // TUI 활동/사용량 추적용 (응답 본문은 jsonl tail에서 가져옴)
+  private allOutput = "";
   private lastDataAt = Date.now();
   private queue: QueueItem[] = [];
   private busy = false;
   private dead = false;
   private currentTimer: NodeJS.Timeout | null = null;
-  private currentResponseStartIdx = 0;
+  private tail: SessionTail;
+  /** 현재 대기 중인 응답 — jsonl에서 done 이벤트 오면 resolve */
+  private pendingResolve: ((text: string) => void) | null = null;
+  private pendingReject: ((err: Error) => void) | null = null;
+  private pendingText = ""; // assistant chunk 누적 (여러 text 블록 가능)
 
   constructor(opts: OpenSessionOpts) {
     super();
@@ -108,25 +105,57 @@ export class PtySession extends EventEmitter {
       env,
     });
 
+    // jsonl tail은 PTY spawn 시각 이후 생긴 파일만 우리 세션으로 인정
+    this.tail = new SessionTail(opts.cwd, { since: this.createdAt - 1_000 });
+    this.tail.on("assistant", (text) => {
+      this.pendingText += text;
+    });
+    this.tail.on("done", (text) => {
+      // text 인자는 마지막 메시지 본문, pendingText는 누적
+      const finalText = this.pendingText || text;
+      this.pendingText = "";
+      if (this.pendingResolve) {
+        const r = this.pendingResolve;
+        this.pendingResolve = null;
+        this.pendingReject = null;
+        r(finalText);
+      }
+    });
+    this.tail.on("error", (err) => this.emitWarning(err));
+
     this.proc.onData((d) => this.onPtyData(d));
     this.proc.onExit(({ exitCode }) => {
       this.dead = true;
       this.emit("exit", exitCode ?? null);
-      // 대기 중인 큐 모두 실패 처리
+      this.tail.close().catch(() => {});
       while (this.queue.length) {
         const item = this.queue.shift()!;
         item.reject(new SessionDeadError(this.id));
       }
+      if (this.pendingReject) {
+        this.pendingReject(new SessionDeadError(this.id));
+        this.pendingResolve = null;
+        this.pendingReject = null;
+      }
     });
   }
 
-  /** TUI ready 감지 (`❯` 마커 첫 출현) → system prompt 주입 + 핸드셰이크. */
+  /**
+   * 초기화 — TUI ready + system prompt 핸드셰이크 (병렬 attach).
+   *
+   * 주의: claude는 PTY spawn만으로 jsonl 파일을 만들지 않는다 — 첫 입력이
+   * 도착해야 파일이 생성됨. 그래서 attach는 system prompt 송신과 병렬로
+   * 진행해야 한다.
+   */
   async init(opts: { allowedTools?: string }): Promise<void> {
     await this.waitForReady();
-    // 부팅 출력은 응답 분석에서 제외
     this.allOutput = this.buffer;
     this.buffer = "";
-    this.currentResponseStartIdx = 0;
+
+    // attach를 background로 — 첫 send가 jsonl을 생성시킴
+    const attachPromise = this.tail.attach().catch((err) => {
+      this.emitWarning(err as Error);
+    });
 
     const systemPrompt = buildSystemPrompt({
       mode: this.mode,
@@ -134,17 +163,20 @@ export class PtySession extends EventEmitter {
       allowedTools: opts.allowedTools,
     });
 
-    // 핸드셰이크: MUX_READY 응답 기대하되 실패해도 통과
-    // 'error' 이벤트는 listener 없으면 throw하므로 'warn' 사용 (구독 옵션)
+    // 핸드셰이크: MUX_READY 응답 기대하되 실패해도 통과.
+    // sendInternal이 PTY write를 즉시 수행 → claude가 jsonl 파일 만들기 시작 →
+    // attach가 완료 → done 이벤트 → sendInternal resolve. 순서 자연스럽게 풀림.
     try {
       const ack = await this.sendInternal(systemPrompt, {
         idleDeathMs: HANDSHAKE_TIMEOUT_MS,
         maxMs: HANDSHAKE_TIMEOUT_MS,
       });
+      await attachPromise; // attach 결과 확정 (warn은 위에서 emit됨)
       if (!/MUX_READY/.test(ack)) {
         this.emitWarning(new HandshakeWarning(this.id, ack));
       }
     } catch (err) {
+      await attachPromise;
       this.emitWarning(new HandshakeWarning(this.id, String(err)));
     }
   }
@@ -185,12 +217,20 @@ export class PtySession extends EventEmitter {
 
   async close(): Promise<void> {
     if (this.dead) return;
+    const exitPromise = new Promise<void>((resolve) => {
+      const onExit = (): void => resolve();
+      // exit 이벤트가 이미 트리거됐을 수 있으니 1초 안에 안 오면 강제 진행
+      this.proc.onExit(onExit);
+      setTimeout(onExit, 1500);
+    });
     this.dead = true;
     try {
       this.proc.kill();
     } catch {
       // ignore
     }
+    await exitPromise;
+    await this.tail.close().catch(() => {});
   }
 
   // === internal ===
@@ -253,57 +293,76 @@ export class PtySession extends EventEmitter {
     }
   }
 
+  /**
+   * 메시지 1개 전송 → jsonl `done` 이벤트 대기 → 응답 텍스트 반환.
+   *
+   * 응답 끝 판정: jsonl에서 stop_reason !== null인 assistant 메시지 도착.
+   * TUI 출력은 보조용 (활동성 확인, idle 죽음 판정).
+   */
   private sendInternal(prompt: string, opts: Required<SendOpts>): Promise<string> {
     return new Promise((resolve, reject) => {
-      this.currentResponseStartIdx = this.allOutput.length;
+      this.pendingText = "";
+      this.pendingResolve = resolve;
+      this.pendingReject = reject;
       this.buffer = "";
       this.lastDataAt = Date.now();
       const sentAt = Date.now();
 
-      // 멀티라인 안전 처리 → CR로 submit
       const encoded = encodeForPty(prompt, { multiline: "flatten" });
       this.proc.write(encoded);
 
-      const finish = (err?: Error): void => {
+      const cleanup = (): void => {
         if (this.currentTimer) {
           clearInterval(this.currentTimer);
           this.currentTimer = null;
         }
-        if (err) return reject(err);
-        const slice = this.allOutput.slice(this.currentResponseStartIdx);
-        resolve(extractAssistantText(slice));
       };
 
+      // pendingResolve/Reject가 done 이벤트나 사망 이벤트로 호출되면 cleanup 보장
+      const origResolve = this.pendingResolve;
+      const origReject = this.pendingReject;
+      this.pendingResolve = (text) => {
+        cleanup();
+        origResolve!(text);
+      };
+      this.pendingReject = (err) => {
+        cleanup();
+        origReject!(err);
+      };
+
+      // watchdog: jsonl이 안 와도 PTY 활동이 멈추면 죽었다고 판단
       this.currentTimer = setInterval(() => {
         if (this.dead) {
-          finish(new SessionDeadError(this.id));
+          if (this.pendingReject) {
+            const r = this.pendingReject;
+            this.pendingResolve = null;
+            this.pendingReject = null;
+            r(new SessionDeadError(this.id));
+          }
           return;
         }
         const now = Date.now();
         const idleMs = now - this.lastDataAt;
         const elapsedMs = now - sentAt;
-        const frame = parseFrame(this.buffer);
 
-        // 핵심 완료 조건: idle 짧음 AND 프롬프트 마커 재출현
-        if (idleMs >= IDLE_DONE_MS && frame.promptReady && elapsedMs > 800) {
-          finish();
-          return;
-        }
-        // fallback: 마커 없어도 idle 길면 완료
-        if (idleMs >= IDLE_FALLBACK_MS && elapsedMs > 800) {
-          finish();
-          return;
-        }
-        // 활동 기반 죽음 판정 (사용자 제어 가능)
         if (idleMs >= opts.idleDeathMs) {
           this.interrupt();
-          finish(new IdleDeathError(this.id, opts.idleDeathMs));
+          if (this.pendingReject) {
+            const r = this.pendingReject;
+            this.pendingResolve = null;
+            this.pendingReject = null;
+            r(new IdleDeathError(this.id, opts.idleDeathMs));
+          }
           return;
         }
-        // 절대 상한 (옵션 — 0이면 무제한)
         if (opts.maxMs > 0 && elapsedMs >= opts.maxMs) {
           this.interrupt();
-          finish(new MaxDurationError(this.id, opts.maxMs));
+          if (this.pendingReject) {
+            const r = this.pendingReject;
+            this.pendingResolve = null;
+            this.pendingReject = null;
+            r(new MaxDurationError(this.id, opts.maxMs));
+          }
           return;
         }
       }, 200);
