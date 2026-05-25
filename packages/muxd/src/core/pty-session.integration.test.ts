@@ -9,11 +9,16 @@
  * 환경 부재로 진짜 못 돌리는 경우만 옵트인 (MUX_INTEGRATION=1) 으로 분리.
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { PtySession } from "./pty-session.js";
 
 const ENABLED = process.env.MUX_INTEGRATION === "1";
 const d = ENABLED ? describe : describe.skip;
+
+/** PTY 인터랙티브는 사람 속도. 테스트 간 5초 cooldown으로 자원 정리 보장. */
+afterEach(async () => {
+  await new Promise((r) => setTimeout(r, 5_000));
+});
 
 d("PtySession integration (real claude CLI)", () => {
   it(
