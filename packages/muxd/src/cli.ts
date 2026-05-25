@@ -4,7 +4,7 @@
  * v0.0.1 스캐폴드: status / version만. start / stop은 후속 커밋.
  */
 
-import { locateClaude, ClaudeCliNotFoundError } from "./locate-claude.js";
+import { locateClaude, ClaudeCliNotFoundError } from "./core/locate-claude.js";
 
 const args = process.argv.slice(2);
 const cmd = args[0] ?? "help";
