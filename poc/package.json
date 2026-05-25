@@ -1,0 +1,13 @@
+{
+  "name": "claude-mux-poc",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "roundtrip": "node pty-roundtrip.mjs",
+    "many": "node pty-many.mjs"
+  },
+  "dependencies": {
+    "node-pty": "^1.0.0",
+    "strip-ansi": "^7.1.0"
+  }
+}
