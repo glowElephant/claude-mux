@@ -2,6 +2,44 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.2] — 2026-05-31
+
+### Added — Daemon + JSON-RPC IPC + Client 패키지
+- **`packages/muxd/src/daemon/`**:
+  - `DaemonServer` — `net.createServer`로 Unix socket(POSIX) / Named pipe(Windows) listen. 단일 호스트/단일 사용자, OS 권한으로 격리.
+  - `protocol.ts` — JSON-RPC 2.0 method 정의 (`mux.openSession` / `send` / `stream` / `close` / `ask` / `status` / `shutdown`) + 에러 코드 (1010 = BLOCKED).
+  - `framing.ts` — NDJSON 양방향 framing (`attachNdjsonReader`, `writeMessage`).
+  - `socket-path.ts` — 플랫폼별 위치: `$XDG_RUNTIME_DIR/muxd.sock` / `/tmp/muxd-<uid>.sock` / `\\.\pipe\muxd-<user>`.
+- **`muxd` CLI 신규 커맨드**:
+  - `muxd serve` — foreground daemon (Ctrl+C로 종료).
+  - `muxd status` — claude CLI 위치 + daemon 상태 (소켓 ping).
+  - `muxd stop` — running daemon shutdown.
+- **`packages/client`** (`@claude-mux/client`, private):
+  - `Client` 클래스 — `ask` / `openSession` / `stream` / `close` / `status`.
+  - `Session` 핸들 — `send` / `close`.
+  - `transport.ts` — NDJSON JSON-RPC client + stream notification dispatch.
+  - `errors.ts` — `BlockedError` / `MuxClientError` + `buildErrorFromRpc` (RPC 에러 코드 → 클래스 매핑, BLOCKED는 reason/rawReply 보존).
+  - `auto-spawn.ts` — 데몬 없으면 `muxd serve` 자동 detached spawn + ready 폴링. `MUXD_BIN` 환경변수 또는 PATH lookup으로 바이너리 위치.
+
+### Monorepo
+- 루트 `package.json` workspaces 추가 (`packages/*`).
+- `@claude-mux/muxd`에 subpath exports — `.` / `./bridge` / `./core` / `./daemon` / `./runner`.
+
+### Tests
+- **muxd 단위 69 통과** (이전 46 + 새 23: framing 6 + protocol 8 + server 5 + socket-path 4).
+- **client 단위 9 통과** (errors 매핑 검증).
+- **통합 (real claude, `MUX_INTEGRATION=1`)**:
+  - client + DaemonServer end-to-end: `ask` round-trip ✓ (18s) / `status` ✓ (5s).
+  - 기존 muxd bridge/pty-session 통합 5 회귀 없음.
+
+### Migration 노트
+- v0.1.1 bridge in-process API는 그대로 export 유지. 데몬 없이 직접 사용 가능.
+- 새 daemon API는 별도 채널 — Python 클라이언트(v0.2.0) 진입점.
+
+### Deferred (변경 없음)
+- 모델이 약속어를 자연 트리거하게 만드는 작업 → **#13**
+- Python 클라이언트 + currency-edge/vidfolio 마이그레이션 → **v0.2.0**
+
 ## [0.1.1] — 2026-05-31
 
 ### Added — 약속어 핸들링 인프라
