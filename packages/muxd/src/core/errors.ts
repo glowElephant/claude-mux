@@ -44,16 +44,29 @@ export class BlockedError extends MuxBaseError {
 }
 
 /**
- * 응답 본문에서 `MUX_BLOCKED:` 약속어를 찾아 reason 추출.
+ * 응답 본문에서 약속어를 찾아 reason 추출.
+ *
+ * 두 형식 모두 매치 (v0.1.3+ — 모델이 MUX_ prefix를 system token으로 인식해서
+ * 안전상 출력 거부하는 경향 우회):
+ *   1. XML 형식 (선호): `<mux:blocked>reason</mux:blocked>` — 일반 마크업으로 인식
+ *   2. 기존 형식 (backward compat): 줄 시작에 `MUX_BLOCKED: reason`
  *
  * 매치 규칙:
- *  - 본문 어디든 새 줄 시작에 `MUX_BLOCKED:` 가 나오면 그 줄의 나머지를 reason으로
- *  - 본문 자체가 그 토큰으로 시작하는 경우도 포함
- *  - 정상 응답에서 우연히 등장하지 않게 줄 시작(line start)으로 제한
+ *  - XML: 본문 어디든 매치 (multi-line 대응)
+ *  - 기존: 줄 시작에 토큰 (정상 응답 우연한 등장 차단)
  *
- * 반환: 매치되면 reason 문자열, 안 되면 null.
+ * 반환: 매치되면 reason 문자열, 없으면 null.
  */
+const XML_BLOCKED_RE = /<mux:blocked>([\s\S]*?)<\/mux:blocked>/i;
+
 export function matchBlocked(text: string): string | null {
+  // 1) XML 우선
+  const m = text.match(XML_BLOCKED_RE);
+  if (m) {
+    const reason = m[1].trim();
+    return reason.length === 0 ? "(no reason given)" : reason;
+  }
+  // 2) 기존 형식 — 줄 시작
   const lines = text.split(/\r?\n/);
   for (const line of lines) {
     const t = line.trim();

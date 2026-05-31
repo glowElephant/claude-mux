@@ -70,11 +70,11 @@ d("PtySession integration (real claude CLI)", () => {
     { timeout: 240_000 },
   );
 
-  // v0.1.1 인프라(matchBlocked + done 핸들러 throw 분기)는 단위 테스트(errors.test.ts)로 검증됨.
-  // 실제 모델로 트리거하는 건 별도 — 명시적 명령형("Reply MUX_BLOCKED: foo")조차 모델이 안전상 거부하고
-  // 응답 안 함 (60s idle로 죽음). 자연 프롬프트도 동일. 모델 유도 방법은 #12에서 별도 연구.
+  // v0.1.3: matchBlocked 인프라가 XML 형식(<mux:blocked>)도 매치 — 단위 테스트로 검증됨.
+  // 실제 모델 트리거는 system-prompt 어떤 변경이든 통합 전체 회귀시킴 (이전 5개 통과 케이스도 stall).
+  // 모델 행동 자체가 약속어 사용을 거부하는 듯 — 별도 마일스톤 #13으로 계속 연구.
   it.skip(
-    "automation: send() throws BlockedError when reply contains MUX_BLOCKED token (model refuses — see #12)",
+    "automation: send() throws BlockedError on impossible question (model refuses — see #13)",
     async () => {
       const s = new PtySession({
         cwd: process.cwd(),
@@ -85,7 +85,7 @@ d("PtySession integration (real claude CLI)", () => {
         await s.init({});
         await expect(
           s.send(
-            'Reply with exactly one line and nothing else: "MUX_BLOCKED: training cutoff"',
+            "What was the closing exchange rate of USD to KRW on 2030-12-31?",
             { idleDeathMs: 60_000, maxMs: 120_000 },
           ),
         ).rejects.toBeInstanceOf(BlockedError);
