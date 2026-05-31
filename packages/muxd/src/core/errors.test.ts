@@ -1,7 +1,40 @@
 import { describe, it, expect } from "vitest";
 import { BlockedError, matchBlocked } from "./errors.js";
 
-describe("matchBlocked", () => {
+describe("matchBlocked — XML form (v0.1.3+)", () => {
+  it("matches simple XML form", () => {
+    expect(matchBlocked("<mux:blocked>no internet</mux:blocked>")).toBe("no internet");
+  });
+
+  it("matches XML form with surrounding whitespace/newlines", () => {
+    expect(matchBlocked("\n  <mux:blocked>missing api key</mux:blocked>\n")).toBe(
+      "missing api key",
+    );
+  });
+
+  it("matches XML form even with preamble (XML preferred)", () => {
+    expect(
+      matchBlocked("I cannot answer that.\n<mux:blocked>training cutoff</mux:blocked>"),
+    ).toBe("training cutoff");
+  });
+
+  it("XML form with empty reason returns fallback", () => {
+    expect(matchBlocked("<mux:blocked></mux:blocked>")).toBe("(no reason given)");
+    expect(matchBlocked("<mux:blocked>   </mux:blocked>")).toBe("(no reason given)");
+  });
+
+  it("XML form is case-insensitive (some models capitalize)", () => {
+    expect(matchBlocked("<MUX:BLOCKED>x</MUX:BLOCKED>")).toBe("x");
+  });
+
+  it("XML form supports multi-line reason", () => {
+    expect(
+      matchBlocked("<mux:blocked>multi\nline\nreason</mux:blocked>"),
+    ).toBe("multi\nline\nreason");
+  });
+});
+
+describe("matchBlocked — legacy MUX_BLOCKED: form (backward compat)", () => {
   it("returns reason when body starts with MUX_BLOCKED:", () => {
     expect(matchBlocked("MUX_BLOCKED: cannot access future data")).toBe(
       "cannot access future data",

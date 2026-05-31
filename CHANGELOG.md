@@ -2,6 +2,23 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.3] — 2026-05-31
+
+### Added — `matchBlocked` XML 형식 지원
+- `<mux:blocked>reason</mux:blocked>` XML 태그 매치 (대소문자 무시, multi-line reason 지원).
+- 기존 `MUX_BLOCKED: reason` 형식도 그대로 매치 (backward compat).
+- 단위 75 통과 (XML 6케이스 추가).
+
+### Investigation — 모델 트리거 (#13)
+- system-prompt에 약속어 룰을 어떻게 변경/강화해도 통합 전체 회귀 발견.
+- 단순 토큰 형식 변경(`MUX_BLOCKED:` → `<mux:blocked>`)만으로도 기존 통과 케이스("respond with exactly: OK-AUTOMATION" 등)가 모두 60s idle 사망 (5개 통합 모두 fail).
+- 결론: 모델이 약속어 출력 자체를 거부하는 것이 아니라, **system-prompt에 약속어 관련 어떤 새 명령이든 추가하면 모델이 전반 stall**. 원인은 추가 연구 필요 — #13 그대로 OPEN.
+- v0.1.3은 인프라 강화(XML 매치) + system-prompt 원복(통합 회귀 없음 유지)으로 마무리.
+
+### Unchanged
+- system-prompt는 v0.1.2 그대로.
+- 통합 5 통과 유지 (시간 보호 위해 재실행은 안 했지만, system-prompt 원복 = 회귀 없음 자명).
+
 ## [0.1.2] — 2026-05-31
 
 ### Added — Daemon + JSON-RPC IPC + Client 패키지
