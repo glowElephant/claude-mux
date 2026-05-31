@@ -2,6 +2,28 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.1] — 2026-05-31
+
+### Added — 약속어 핸들링 인프라
+- `core/errors.ts`: `MuxBaseError` 베이스 + `BlockedError` (`code: "BLOCKED"`, `reason`, `rawReply`, `sessionId`).
+- `matchBlocked(text)` 헬퍼: 응답 본문의 줄 시작에서 `MUX_BLOCKED:` 매치, reason 추출. CRLF 호환, 줄 시작 제한으로 우연한 등장 차단.
+- `PtySession.send()` done 핸들러 분기: 응답 본문에 약속어 검출 → `BlockedError` reject. 호출자 `try/catch`로 정상 응답 vs 실패 분기.
+- core barrel(`core/index.ts`)에서 export.
+
+### Tests
+- 단위 46 통과 (errors 10개 추가): `matchBlocked` 8케이스(시작/끝 줄, CRLF, 빈 reason, 중간 등장 무시 등) + `BlockedError` 2케이스.
+- 통합 5 통과(회귀 없음, system-prompt 변경 없음).
+
+### Known limitation — 별도 작업 (#12)
+- 실제 모델로 약속어 자연/명시 트리거 검증은 모델 안전 학습으로 인해 즉시 안 됨.
+- 명시 명령형(`'Reply with exactly: "MUX_BLOCKED: training cutoff"'`)도 모델이 거부 → idle 사망.
+- 약속어 인프라 자체는 검증됨 — 호출자가 \`new BlockedError(...)\` throw하거나 모델이 약속어를 실제로 출력하면 `try/catch`로 잡힘.
+- 모델 유도 방법(system-prompt 디자인, 약속어 형식 변경, 별도 채널 등) 연구는 #12.
+
+### Deferred (변경 없음)
+- JSON-RPC over Unix socket/named pipe + `@claude-mux/client` + 자동 spawn → **v0.1.2**
+- Python 클라이언트 + currency-edge/vidfolio 마이그레이션 → **v0.2.0**
+
 ## [0.1.0] — 2026-05-31
 
 ### Added — Phase 0 / PoC

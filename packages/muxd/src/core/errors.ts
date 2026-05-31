@@ -1,0 +1,66 @@
+/**
+ * muxd 에러 클래스 — 모델 약속어(MUX_BLOCKED 등) 또는 인프라 실패를
+ * 호출자에게 결정적으로 알리기 위한 throw 대상.
+ *
+ * 약속어 흐름:
+ *  1. system prompt가 모델에게 "할 수 없으면 MUX_BLOCKED: <reason> 한 줄로 답해" 시킴
+ *  2. 모델 응답이 jsonl에 기록되면 session-tail이 done 이벤트로 본문 전달
+ *  3. PtySession이 본문에서 약속어 검출 → reply 대신 BlockedError throw
+ *  4. 호출자는 try/catch로 정상 응답 vs 실패 분기
+ *
+ * 모델이 약속어를 안 쓰면 stall → idleDeath fallback (별개 흐름).
+ */
+
+import type { MuxErrorCode } from "./types.js";
+import { MUX_TOKENS } from "./types.js";
+
+/** 모든 muxd 에러의 공통 베이스 — `code`로 분기 가능 */
+export class MuxBaseError extends Error {
+  readonly code: MuxErrorCode;
+  readonly sessionId?: string;
+
+  constructor(code: MuxErrorCode, message: string, sessionId?: string) {
+    super(message);
+    this.name = this.constructor.name;
+    this.code = code;
+    this.sessionId = sessionId;
+  }
+}
+
+/**
+ * 모델이 `MUX_BLOCKED: <reason>` 약속어로 응답 — task가 불가능함을 명시.
+ * 호출자는 `.reason`으로 사유 확인 후 fallback(재시도 / 다른 도구 / 사용자에게 보고) 결정.
+ */
+export class BlockedError extends MuxBaseError {
+  readonly reason: string;
+  /** 모델이 출력한 원본 응답 본문 — 디버깅/로그용 */
+  readonly rawReply: string;
+
+  constructor(sessionId: string, reason: string, rawReply: string) {
+    super("BLOCKED", `Session ${sessionId} blocked: ${reason}`, sessionId);
+    this.reason = reason;
+    this.rawReply = rawReply;
+  }
+}
+
+/**
+ * 응답 본문에서 `MUX_BLOCKED:` 약속어를 찾아 reason 추출.
+ *
+ * 매치 규칙:
+ *  - 본문 어디든 새 줄 시작에 `MUX_BLOCKED:` 가 나오면 그 줄의 나머지를 reason으로
+ *  - 본문 자체가 그 토큰으로 시작하는 경우도 포함
+ *  - 정상 응답에서 우연히 등장하지 않게 줄 시작(line start)으로 제한
+ *
+ * 반환: 매치되면 reason 문자열, 안 되면 null.
+ */
+export function matchBlocked(text: string): string | null {
+  const lines = text.split(/\r?\n/);
+  for (const line of lines) {
+    const t = line.trim();
+    if (!t.startsWith(MUX_TOKENS.BLOCKED)) continue;
+    const reason = t.slice(MUX_TOKENS.BLOCKED.length).trim();
+    if (reason.length === 0) return "(no reason given)";
+    return reason;
+  }
+  return null;
+}

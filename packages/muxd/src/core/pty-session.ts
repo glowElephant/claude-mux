@@ -24,6 +24,7 @@ import { buildSystemPrompt } from "./system-prompt.js";
 import { encodeForPty, INTERRUPT_ESC, INTERRUPT_CTRL_C } from "./input-encoder.js";
 import { parseFrame, type UsageSnapshot } from "./tui-parser.js";
 import { SessionTail, type JsonlMessage } from "./session-tail.js";
+import { BlockedError, matchBlocked } from "./errors.js";
 import type { OpenSessionOpts, SessionInfo, SessionMode } from "./types.js";
 
 interface QueueItem {
@@ -116,8 +117,15 @@ export class PtySession extends EventEmitter {
       this.pendingText = "";
       if (this.pendingResolve) {
         const r = this.pendingResolve;
+        const j = this.pendingReject;
         this.pendingResolve = null;
         this.pendingReject = null;
+        // 약속어 매치 → reject. 호출자 try/catch로 실패 분기 가능.
+        const reason = matchBlocked(finalText);
+        if (reason !== null) {
+          j?.(new BlockedError(this.id, reason, finalText));
+          return;
+        }
         r(finalText);
       }
     });

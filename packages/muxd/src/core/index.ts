@@ -18,3 +18,4 @@ export {
   HandshakeWarning,
 } from "./pty-session.js";
 export type { SendOpts } from "./pty-session.js";
+export { MuxBaseError, BlockedError, matchBlocked } from "./errors.js";

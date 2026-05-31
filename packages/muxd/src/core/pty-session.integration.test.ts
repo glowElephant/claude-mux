@@ -11,6 +11,7 @@
 
 import { describe, it, expect, afterEach } from "vitest";
 import { PtySession } from "./pty-session.js";
+import { BlockedError } from "./errors.js";
 
 const ENABLED = process.env.MUX_INTEGRATION === "1";
 const d = ENABLED ? describe : describe.skip;
@@ -69,10 +70,11 @@ d("PtySession integration (real claude CLI)", () => {
     { timeout: 240_000 },
   );
 
-  // 비결정적 — Claude가 시뮬레이션을 따르지 않고 실제 도구 호출로 빠지면 실패.
-  // 별도 이슈에서 결정적 프롬프트 설계 필요.
+  // v0.1.1 인프라(matchBlocked + done 핸들러 throw 분기)는 단위 테스트(errors.test.ts)로 검증됨.
+  // 실제 모델로 트리거하는 건 별도 — 명시적 명령형("Reply MUX_BLOCKED: foo")조차 모델이 안전상 거부하고
+  // 응답 안 함 (60s idle로 죽음). 자연 프롬프트도 동일. 모델 유도 방법은 #12에서 별도 연구.
   it.skip(
-    "MUX_BLOCKED token is returned when Claude judges impossible (automation)",
+    "automation: send() throws BlockedError when reply contains MUX_BLOCKED token (model refuses — see #12)",
     async () => {
       const s = new PtySession({
         cwd: process.cwd(),
@@ -81,13 +83,12 @@ d("PtySession integration (real claude CLI)", () => {
       });
       try {
         await s.init({});
-        const reply = await s.send(
-          "You have no internet. Get the current real-time stock price of AAPL. " +
-            "If you cannot, use the MUX_BLOCKED token as instructed.",
-          { idleDeathMs: 60_000, maxMs: 120_000 },
-        );
-        // 너무 빡빡한 검증은 모델 행동에 따라 흔들림 — 토큰 등장만 확인
-        expect(reply).toMatch(/MUX_BLOCKED/);
+        await expect(
+          s.send(
+            'Reply with exactly one line and nothing else: "MUX_BLOCKED: training cutoff"',
+            { idleDeathMs: 60_000, maxMs: 120_000 },
+          ),
+        ).rejects.toBeInstanceOf(BlockedError);
       } finally {
         await s.close();
       }
