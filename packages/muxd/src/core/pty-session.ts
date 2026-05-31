@@ -24,7 +24,7 @@ import { buildSystemPrompt } from "./system-prompt.js";
 import { encodeForPty, INTERRUPT_ESC, INTERRUPT_CTRL_C } from "./input-encoder.js";
 import { parseFrame, type UsageSnapshot } from "./tui-parser.js";
 import { SessionTail, type JsonlMessage } from "./session-tail.js";
-import { BlockedError, matchBlocked } from "./errors.js";
+import { BlockedError, matchBlocked, matchFailurePattern } from "./errors.js";
 import type { OpenSessionOpts, SessionInfo, SessionMode } from "./types.js";
 
 interface QueueItem {
@@ -35,13 +35,21 @@ interface QueueItem {
   idleDeathMs: number;
   /** 절대 상한 (옵션, 0이면 무제한 — 활동 있는 한 계속). */
   maxMs: number;
+  /** 응답 후 자연어 거부 표현 검사 → BlockedError throw */
+  detectFailure: boolean;
 }
 
 export interface SendOpts {
-  /** 활동 기반 죽음 판정: 마지막 PTY 청크 이후 idle (ms). 기본 60_000 */
+  /** 활동 기반 죽음 판정: 마지막 PTY 청크 이후 idle (ms). 기본 120_000 (v0.1.4+) */
   idleDeathMs?: number;
   /** 절대 상한 (ms). 0/미지정이면 무제한 (활동만 보면 됨) */
   maxMs?: number;
+  /**
+   * 응답 본문에 자연어 거부 표현(예: "I cannot", "할 수 없습니다") 매치 시 BlockedError throw.
+   * false positive 위험 — 정상 응답에 우연히 등장할 수 있어 opt-in. 기본 false.
+   * 약속어(MUX_BLOCKED / <mux:blocked>)는 detectFailure 와 무관하게 항상 검사.
+   */
+  detectFailure?: boolean;
 }
 
 export interface PtySessionEvents {
@@ -51,8 +59,12 @@ export interface PtySessionEvents {
   usage: (u: UsageSnapshot) => void;
 }
 
-/** 활동 없는 채로 이 시간 지나면 죽었다고 판정 (기본값) */
-const DEFAULT_IDLE_DEATH_MS = 60_000;
+/**
+ * 활동 없는 채로 이 시간 지나면 죽었다고 판정 (기본값).
+ * v0.1.4: 60s → 120s. currency-edge 사이드카 PoC에서 긴 prompt(216자)가 60s 안에
+ * 응답 못 함 확인 → 보수적으로 120s로 늘림. 호출자가 명시적으로 더 늘리고 줄일 수 있음.
+ */
+const DEFAULT_IDLE_DEATH_MS = 120_000;
 /** TUI 부팅 ready 감지 타임아웃 */
 const READY_TIMEOUT_MS = 20_000;
 /** MUX_READY 핸드셰이크 응답 대기 (실패해도 그냥 통과) */
@@ -79,6 +91,7 @@ export class PtySession extends EventEmitter {
   private pendingResolve: ((text: string) => void) | null = null;
   private pendingReject: ((err: Error) => void) | null = null;
   private pendingText = ""; // assistant chunk 누적 (여러 text 블록 가능)
+  private pendingDetectFailure = false;
 
   constructor(opts: OpenSessionOpts) {
     super();
@@ -114,17 +127,27 @@ export class PtySession extends EventEmitter {
     this.tail.on("done", (text) => {
       // text 인자는 마지막 메시지 본문, pendingText는 누적
       const finalText = this.pendingText || text;
+      const detectFailure = this.pendingDetectFailure;
       this.pendingText = "";
+      this.pendingDetectFailure = false;
       if (this.pendingResolve) {
         const r = this.pendingResolve;
         const j = this.pendingReject;
         this.pendingResolve = null;
         this.pendingReject = null;
-        // 약속어 매치 → reject. 호출자 try/catch로 실패 분기 가능.
-        const reason = matchBlocked(finalText);
-        if (reason !== null) {
-          j?.(new BlockedError(this.id, reason, finalText));
+        // 1) 약속어 — 항상 검사
+        const blockedReason = matchBlocked(finalText);
+        if (blockedReason !== null) {
+          j?.(new BlockedError(this.id, blockedReason, finalText));
           return;
+        }
+        // 2) 자연어 거부 표현 — opt-in (false positive 가능)
+        if (detectFailure) {
+          const phrase = matchFailurePattern(finalText);
+          if (phrase !== null) {
+            j?.(new BlockedError(this.id, `refusal phrase: "${phrase}"`, finalText));
+            return;
+          }
         }
         r(finalText);
       }
@@ -178,6 +201,7 @@ export class PtySession extends EventEmitter {
       const ack = await this.sendInternal(systemPrompt, {
         idleDeathMs: HANDSHAKE_TIMEOUT_MS,
         maxMs: HANDSHAKE_TIMEOUT_MS,
+        detectFailure: false,
       });
       await attachPromise; // attach 결과 확정 (warn은 위에서 emit됨)
       if (!/MUX_READY/.test(ack)) {
@@ -204,6 +228,7 @@ export class PtySession extends EventEmitter {
         reject,
         idleDeathMs: opts.idleDeathMs ?? DEFAULT_IDLE_DEATH_MS,
         maxMs: opts.maxMs ?? 0,
+        detectFailure: opts.detectFailure ?? false,
       });
       this.drain();
     });
@@ -289,6 +314,7 @@ export class PtySession extends EventEmitter {
       const text = await this.sendInternal(item.prompt, {
         idleDeathMs: item.idleDeathMs,
         maxMs: item.maxMs,
+        detectFailure: item.detectFailure,
       });
       item.resolve(text);
     } catch (err) {
@@ -312,6 +338,7 @@ export class PtySession extends EventEmitter {
       this.pendingText = "";
       this.pendingResolve = resolve;
       this.pendingReject = reject;
+      this.pendingDetectFailure = opts.detectFailure;
       this.buffer = "";
       this.lastDataAt = Date.now();
       const sentAt = Date.now();

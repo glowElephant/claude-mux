@@ -30,6 +30,11 @@ export interface OpenSessionOpts {
 export interface SendOpts {
   idleDeathMs?: number;
   maxMs?: number;
+  /**
+   * 응답에 자연어 거부 표현 매치 시 BlockedError throw. opt-in (false positive 위험).
+   * 약속어(MUX_BLOCKED / <mux:blocked>)는 항상 검사하므로 별개.
+   */
+  detectFailure?: boolean;
 }
 
 export interface AskOpts extends OpenSessionOpts, SendOpts {}
@@ -118,6 +123,7 @@ export class Client {
       rows: opts.rows,
       idleDeathMs: opts.idleDeathMs,
       maxMs: opts.maxMs,
+      detectFailure: opts.detectFailure,
     });
     return r.text;
   }
@@ -159,6 +165,7 @@ export class Client {
           streamId,
           idleDeathMs: opts.idleDeathMs,
           maxMs: opts.maxMs,
+          detectFailure: opts.detectFailure,
         });
         return r.text;
       } finally {
@@ -177,6 +184,7 @@ export class Client {
       prompt,
       idleDeathMs: opts.idleDeathMs,
       maxMs: opts.maxMs,
+      detectFailure: opts.detectFailure,
     });
     return r.text;
   }

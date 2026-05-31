@@ -2,6 +2,29 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.4] — 2026-06-01
+
+### Changed
+- `DEFAULT_IDLE_DEATH_MS`: **60s → 120s**. 긴 prompt에서 60s가 짧음 확인 (사이드카 PoC). 호출자가 명시적으로 override 가능.
+
+### Added — 자연어 거부 표현 감지 (opt-in)
+- `matchFailurePattern(text)` — 응답에 "I cannot", "I'm unable", "할 수 없습니다" 등 거부 표현 매치 시 첫 문구 반환 (영문 9 + 한국어 3 패턴).
+- `SendOpts.detectFailure?: boolean` (기본 false) — opt-in. true면 응답 후 매치 → `BlockedError` throw.
+- 약속어(`MUX_BLOCKED:` / `<mux:blocked>`)는 옵션 무관하게 항상 검사 — 기존 동작 유지.
+- daemon protocol + client API 전반에 `detectFailure` 전달 wiring.
+- 단위 96 통과 (이전 75 + matchFailurePattern 21 케이스).
+
+### Investigation — discord_bot stall 원인 확정 (#3)
+사이드카 진단으로 stall 원인 분리 완료:
+- ✅ 단순 prompt(57자): 13.5초 정상 응답
+- ❌ discord_bot multi-section prompt(216자): `idleDeathMs` 180s로 늘려도 동일 stall (PTY 출력 자체 안 옴)
+- 결론: **muxd 인프라 정상**. stall은 **prompt 패턴 자체** — `system context + "You are the bot's assistant" + ## 헤더 + multi-section` 조합.
+- v0.2.0 마이그레이션 권장사항 PoC README에 기록: prompt 단순화 / `##` 마크다운 회피 / < 150자.
+
+### Deferred (변경 없음)
+- 모델 자율 약속어 트리거 (system-prompt 디자인) → **#13**
+- Python 클라이언트 + 본격 마이그레이션 → **v0.2.0**
+
 ## [0.1.3] — 2026-05-31
 
 ### Added — `matchBlocked` XML 형식 지원

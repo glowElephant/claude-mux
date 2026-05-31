@@ -59,6 +59,40 @@ export class BlockedError extends MuxBaseError {
  */
 const XML_BLOCKED_RE = /<mux:blocked>([\s\S]*?)<\/mux:blocked>/i;
 
+/**
+ * 자연어 거부 표현 패턴. 모델이 약속어 안 쓸 때 fallback 신호로 사용.
+ *
+ * **false positive 위험**: 정상 응답에 "I'm sorry" 같은 표현이 우연히 들어갈 수
+ * 있으므로 opt-in. 핵심은 **거부 의도가 명확한** 문구만.
+ *
+ * 영문 + 한국어 케이스를 모두 커버. 더 추가 필요하면 여기에 한 줄씩.
+ */
+const FAILURE_PATTERNS: RegExp[] = [
+  // 영문 — 명확한 거부 표현
+  /\bI (?:cannot|can't|am unable to|am not able to|do not have access|don't have access)\b/i,
+  /\bI'm (?:unable to|not able to|sorry,? (?:but )?I (?:cannot|can't))/i,
+  /\bSorry,? (?:but )?I (?:cannot|can't)\b/i,
+  /\bUnfortunately,? I (?:cannot|can't)\b/i,
+  /\b(?:this is|that's|that is) (?:impossible|not possible)\b/i,
+  // 한국어 — "죄송하지만 ... 수 없" 같은 거부 구문, 단독 "할 수 없습니다" 류
+  /(?:죄송하지만|미안하지만).*수 없/,
+  /(?:할 수 없습니다|불가능합니다|접근할 수 없습니다|모르겠습니다)/,
+];
+
+/**
+ * 응답 본문에서 거부 표현 패턴을 찾아 매치된 첫 문구 반환.
+ * 매치 안 되면 null.
+ *
+ * 자연어라 noise — opt-in 옵션으로만 사용 권장.
+ */
+export function matchFailurePattern(text: string): string | null {
+  for (const re of FAILURE_PATTERNS) {
+    const m = text.match(re);
+    if (m) return m[0];
+  }
+  return null;
+}
+
 export function matchBlocked(text: string): string | null {
   // 1) XML 우선
   const m = text.match(XML_BLOCKED_RE);

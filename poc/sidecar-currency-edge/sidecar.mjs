@@ -27,6 +27,11 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const DRY = process.env.MUX_SIDECAR_DRY === "1";
+/**
+ * SIMPLE=1: discord_bot 패턴 prompt 우회 — D 통합 테스트와 같은 단순 prompt만 보냄.
+ * stall이 prompt 패턴 영향인지 muxd 자체 영향인지 분리 진단용.
+ */
+const SIMPLE = process.env.MUX_SIDECAR_SIMPLE === "1";
 const QUESTION =
   process.env.MUX_SIDECAR_QUESTION ??
   "respond with exactly one line: 'OK-SIDECAR-CURRENCY-EDGE'";
@@ -38,11 +43,13 @@ const QUESTION =
 const ASSISTANT_PROMPT =
   "You are the currency-edge bot's assistant. Reply concisely.";
 const FAKE_CONTEXT = "Slot 0: USD/KRW @ 1380.50 (running 12m)\nP/L: +0.03%";
-const FULL_PROMPT = [
-  ASSISTANT_PROMPT,
-  `\n## 현재 봇 상태\n\`\`\`\n${FAKE_CONTEXT}\n\`\`\`\n`,
-  `\n## 사용자 질문\n${QUESTION}\n\n2000자 이내로 답해.`,
-].join("\n");
+const FULL_PROMPT = SIMPLE
+  ? QUESTION // D 통합 테스트와 동일한 단순 형태
+  : [
+      ASSISTANT_PROMPT,
+      `\n## 현재 봇 상태\n\`\`\`\n${FAKE_CONTEXT}\n\`\`\`\n`,
+      `\n## 사용자 질문\n${QUESTION}\n\n2000자 이내로 답해.`,
+    ].join("\n");
 
 async function main() {
   console.log("[sidecar] PoC start");
@@ -66,8 +73,9 @@ async function main() {
       cwd: __dirname, // 일부러 PoC 폴더 — currency-edge jsonl 디렉토리에 새 파일 안 만듦
       invoker: "currency-edge-sidecar-poc",
       mode: "automation",
-      idleDeathMs: 60_000,
-      maxMs: 120_000,
+      idleDeathMs: 180_000, // v0.1.4: 긴 prompt 대응 60s → 180s
+      maxMs: 240_000,
+      detectFailure: true, // 자연어 거부 표현이면 BlockedError throw
     });
     const dt = Date.now() - t0;
     console.log(`[sidecar] ✓ response (${dt}ms):`);
