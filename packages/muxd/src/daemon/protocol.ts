@@ -51,7 +51,8 @@ export interface OpenSessionResult {
   sessionId: string;
 }
 
-/** mux.send — 기존 세션에 메시지, 응답 텍스트 반환 (또는 BLOCKED error) */
+/** mux.send — 기존 세션에 메시지, 응답 텍스트 반환 (또는 BLOCKED error).
+ * SendOpts에 `detectFailure` (자연어 매치 throw) 포함됨 — v0.1.4 추가. */
 export interface SendParams extends SendOpts {
   sessionId: string;
   prompt: string;

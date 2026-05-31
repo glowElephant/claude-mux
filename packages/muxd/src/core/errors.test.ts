@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { BlockedError, matchBlocked } from "./errors.js";
+import { BlockedError, matchBlocked, matchFailurePattern } from "./errors.js";
 
 describe("matchBlocked — XML form (v0.1.3+)", () => {
   it("matches simple XML form", () => {
@@ -75,6 +75,44 @@ describe("matchBlocked — legacy MUX_BLOCKED: form (backward compat)", () => {
 
   it("matches with CRLF line endings (Windows)", () => {
     expect(matchBlocked("preamble\r\nMUX_BLOCKED: foo\r\n")).toBe("foo");
+  });
+});
+
+describe("matchFailurePattern (v0.1.4 — opt-in 자연어 거부 매치)", () => {
+  it.each([
+    "I cannot help with that",
+    "I can't access the API",
+    "I am unable to retrieve that data",
+    "I'm unable to provide future information",
+    "I'm not able to fetch that",
+    "Sorry, I cannot do that",
+    "Sorry but I can't access live data",
+    "Unfortunately, I can't answer that",
+    "I don't have access to your filesystem",
+    "I do not have access to the network",
+    "This is impossible without an API key",
+    "That's not possible in this environment",
+  ])("matches: %s", (input) => {
+    expect(matchFailurePattern(input)).not.toBeNull();
+  });
+
+  it.each([
+    "죄송하지만 그건 할 수 없습니다",
+    "미안하지만 그 정보는 가져올 수 없어요",
+    "할 수 없습니다",
+    "불가능합니다",
+    "접근할 수 없습니다",
+  ])("matches Korean: %s", (input) => {
+    expect(matchFailurePattern(input)).not.toBeNull();
+  });
+
+  it.each([
+    "OK here is the answer",
+    "The result is 42",
+    "Sorry for the delay, here you go",
+    "I will help you with this task",
+  ])("does NOT match normal response: %s", (input) => {
+    expect(matchFailurePattern(input)).toBeNull();
   });
 });
 

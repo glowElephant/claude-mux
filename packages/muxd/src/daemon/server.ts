@@ -201,6 +201,7 @@ export class DaemonServer {
     const text = await s.send(p.prompt, {
       idleDeathMs: p.idleDeathMs,
       maxMs: p.maxMs,
+      detectFailure: p.detectFailure,
     });
     return { text };
   }
@@ -213,6 +214,7 @@ export class DaemonServer {
     const text = await s.send(p.prompt, {
       idleDeathMs: p.idleDeathMs,
       maxMs: p.maxMs,
+      detectFailure: p.detectFailure,
     });
     const noti: { jsonrpc: "2.0"; method: string; params: StreamChunkNotification } = {
       jsonrpc: "2.0",
