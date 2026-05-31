@@ -1,0 +1,13 @@
+{
+  "name": "claude-mux-workspace",
+  "private": true,
+  "version": "0.0.0",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run -ws build",
+    "test": "npm run -ws test",
+    "test:integration": "npm run -ws test:integration --if-present"
+  }
+}
