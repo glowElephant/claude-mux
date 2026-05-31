@@ -1,6 +1,6 @@
 {
   "name": "@claude-mux/muxd",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
@@ -11,7 +11,8 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
     "cron-parser": "^5.5.0",
