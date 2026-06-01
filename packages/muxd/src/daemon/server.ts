@@ -42,13 +42,38 @@ import {
 } from "./protocol.js";
 import type { MuxBaseError } from "../core/errors.js";
 
-const VERSION = "0.1.2";
+const VERSION = "0.1.7";
 
 interface ServerOpts {
   /** override socket path (테스트용) */
   socketPath?: string;
   /** 데몬 시작 시각 — uptime 계산 */
   startedAt?: number;
+  /**
+   * 디버그 모드 — 각 세션의 PTY 출력을 ring buffer에 저장 + subscriber에 broadcast.
+   * `MUXD_DEBUG=1` 환경변수로도 활성화 (CLI가 처리).
+   */
+  debug?: boolean;
+  /** ring buffer 라인 수 (기본 500). 디버그 모드에서만 의미 있음. */
+  debugRingLines?: number;
+}
+
+/** 한 세션의 디버그 상태 — PTY 출력 ring + subscribers. */
+interface SessionDebugState {
+  /** 세션 정보 스냅샷 */
+  info: {
+    sessionId: string;
+    invoker: string;
+    cwd: string;
+    mode: string;
+    createdAt: number;
+  };
+  /** 종료된 세션 여부 */
+  closed: boolean;
+  /** PTY chunk ring buffer — 라인 단위로 잘라서 보관. 최신이 뒤. */
+  ring: string[];
+  /** 활성 subscriber socket들. close 시 정리. */
+  subscribers: Set<Socket>;
 }
 
 export class DaemonServer {
@@ -59,9 +84,20 @@ export class DaemonServer {
   /** 클라이언트 연결당 stream id → sock 매핑 — 종료 시 정리 */
   private readonly streamingConns = new Set<Socket>();
 
+  private readonly debug: boolean;
+  private readonly debugRingLines: number;
+  /** 디버그용 — 활성/종료된 세션의 PTY 출력 ring + subscriber */
+  private readonly debugStates = new Map<string, SessionDebugState>();
+
   constructor(opts: ServerOpts = {}) {
     this.socketPath = opts.socketPath ?? daemonSocketPath();
     this.startedAt = opts.startedAt ?? Date.now();
+    this.debug = opts.debug ?? (process.env.MUXD_DEBUG === "1");
+    this.debugRingLines = opts.debugRingLines ?? 500;
+  }
+
+  get debugEnabled(): boolean {
+    return this.debug;
   }
 
   async listen(): Promise<string> {
@@ -173,9 +209,107 @@ export class DaemonServer {
         return this.status();
       case "mux.shutdown":
         return this.shutdown();
+      case "mux.debugList":
+        return this.debugList();
+      case "mux.debugSubscribe":
+        return this.debugSubscribe(sock, req.params as { sessionId: string });
       default:
         throw new MethodNotFoundError(req.method);
     }
+  }
+
+  /** 디버그 모드일 때 새 세션마다 ring + subscriber 컨테이너 생성 + PTY data hook. */
+  private attachDebug(s: PtySession): void {
+    if (!this.debug) return;
+    const state: SessionDebugState = {
+      info: {
+        sessionId: s.id,
+        invoker: s.invoker,
+        cwd: s.cwd,
+        mode: s.mode,
+        createdAt: s.createdAt,
+      },
+      closed: false,
+      ring: [],
+      subscribers: new Set<Socket>(),
+    };
+    this.debugStates.set(s.id, state);
+    let pending = "";
+    s.on("data", (chunk: string) => {
+      pending += chunk;
+      // ring은 라인 단위로 — 라인 partial은 다음 chunk와 합침
+      const idx = pending.lastIndexOf("\n");
+      if (idx < 0) return;
+      const complete = pending.slice(0, idx);
+      pending = pending.slice(idx + 1);
+      const lines = complete.split(/\r?\n/);
+      for (const line of lines) {
+        state.ring.push(line);
+        if (state.ring.length > this.debugRingLines) state.ring.shift();
+      }
+      // subscriber에 broadcast
+      const noti = JSON.stringify({
+        jsonrpc: "2.0",
+        method: "mux.debugChunk",
+        params: { sessionId: s.id, chunk: complete + "\n" },
+      }) + "\n";
+      for (const sub of state.subscribers) {
+        try {
+          sub.write(noti);
+        } catch {
+          // 끊긴 subscriber — close 이벤트로 정리됨
+        }
+      }
+    });
+    s.on("exit", () => {
+      state.closed = true;
+      // subscriber에 close notification
+      const noti = JSON.stringify({
+        jsonrpc: "2.0",
+        method: "mux.debugClose",
+        params: { sessionId: s.id },
+      }) + "\n";
+      for (const sub of state.subscribers) {
+        try {
+          sub.write(noti);
+        } catch {}
+      }
+    });
+  }
+
+  private debugList(): {
+    debug: boolean;
+    sessions: Array<{
+      sessionId: string;
+      invoker: string;
+      cwd: string;
+      mode: string;
+      createdAt: number;
+      closed: boolean;
+      ringLines: number;
+    }>;
+  } {
+    if (!this.debug) return { debug: false, sessions: [] };
+    const out = Array.from(this.debugStates.values()).map((s) => ({
+      ...s.info,
+      closed: s.closed,
+      ringLines: s.ring.length,
+    }));
+    return { debug: true, sessions: out };
+  }
+
+  private debugSubscribe(
+    sock: Socket,
+    p: { sessionId: string },
+  ): { ok: boolean; ring: string[]; closed: boolean } {
+    if (!this.debug) {
+      throw new Error("debug mode not enabled (set MUXD_DEBUG=1)");
+    }
+    const state = this.debugStates.get(p.sessionId);
+    if (!state) throw new SessionNotFoundError(p.sessionId);
+    state.subscribers.add(sock);
+    sock.on("close", () => state.subscribers.delete(sock));
+    return { ok: true, ring: [...state.ring], closed: state.closed };
   }
 
   private async openSession(p: OpenSessionParams): Promise<OpenSessionResult> {
@@ -189,6 +323,7 @@ export class DaemonServer {
       rows: p.rows,
     };
     const s = new PtySession(opts);
+    this.attachDebug(s);
     await s.init({});
     this.sessions.set(s.id, s);
     s.on("exit", () => this.sessions.delete(s.id));
@@ -243,6 +378,7 @@ export class DaemonServer {
       cols: p.cols,
       rows: p.rows,
     });
+    this.attachDebug(s);
     try {
       await s.init({});
       const text = await s.send(p.prompt, {
