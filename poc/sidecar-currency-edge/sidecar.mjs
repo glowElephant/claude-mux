@@ -35,6 +35,7 @@ const DRY = process.env.MUX_SIDECAR_DRY === "1";
  */
 const SIMPLE = process.env.MUX_SIDECAR_SIMPLE === "1";
 const SPLIT = process.env.MUX_SIDECAR_SPLIT === "1";
+const LIKE_DISCORD = process.env.MUX_SIDECAR_LIKE_DISCORD === "1";
 const QUESTION =
   process.env.MUX_SIDECAR_QUESTION ??
   "respond with exactly one line: 'OK-SIDECAR-CURRENCY-EDGE'";
@@ -63,6 +64,31 @@ async function runDefault(client) {
     mode: "automation",
     idleDeathMs: 180_000,
     maxMs: 240_000,
+    detectFailure: true,
+  });
+  return { text, dt: Date.now() - t0 };
+}
+
+/**
+ * LIKE_DISCORD 모드 — discord_bot.py:_build_muxd_prompt와 같은 형식.
+ * standalone imperative inline, 한국어 명령형, 마크다운 없음, 컨텍스트 한 줄.
+ */
+async function runLikeDiscord(client) {
+  const ctxOneline = FAKE_CONTEXT.split("\n").map(s => s.trim()).filter(Boolean).join(" ");
+  const prompt =
+    "환율 봇 어시스턴트로서 답해." +
+    ` 봇 상태: ${ctxOneline}.` +
+    ` 사용자 질문: ${QUESTION}.` +
+    " 답을 한국어로 1900자 이내 한 문단으로 작성해.";
+  console.log(`[sidecar:like-discord] prompt length: ${prompt.length} chars`);
+  console.log(`[sidecar:like-discord] prompt preview: ${prompt.slice(0, 120)}...`);
+  const t0 = Date.now();
+  const text = await client.ask(prompt, {
+    cwd: __dirname,
+    invoker: "currency-edge-discord-bot",
+    mode: "automation",
+    idleDeathMs: 120_000,
+    maxMs: 180_000,
     detectFailure: true,
   });
   return { text, dt: Date.now() - t0 };
@@ -129,13 +155,29 @@ async function runSplit(client) {
 
 async function main() {
   console.log("[sidecar] PoC start");
-  const mode = SPLIT ? "split" : SIMPLE ? "simple" : "default";
+  const mode = LIKE_DISCORD
+    ? "like-discord"
+    : SPLIT
+    ? "split"
+    : SIMPLE
+    ? "simple"
+    : "default";
   console.log(`[sidecar] mode: ${mode}`);
   console.log(`[sidecar] DRY: ${DRY}`);
 
   if (DRY) {
     console.log("[sidecar] DRY mode — skipping real claude call");
-    if (mode === "split") {
+    if (mode === "like-discord") {
+      const ctxOneline = FAKE_CONTEXT.split("\n").map(s => s.trim()).filter(Boolean).join(" ");
+      const previewPrompt =
+        "환율 봇 어시스턴트로서 답해." +
+        ` 봇 상태: ${ctxOneline}.` +
+        ` 사용자 질문: ${QUESTION}.` +
+        " 답을 한국어로 1900자 이내 한 문단으로 작성해.";
+      console.log(`[sidecar:like-discord] prompt length: ${previewPrompt.length} chars`);
+      console.log(`[sidecar:like-discord] preview:`);
+      console.log(previewPrompt);
+    } else if (mode === "split") {
       console.log(`[sidecar] split would send 2 messages:`);
       console.log(`  1) context (~60 chars)`);
       console.log(`  2) question (~${QUESTION.length} chars)`);
@@ -148,7 +190,14 @@ async function main() {
 
   const client = new Client({});
   try {
-    const run = mode === "split" ? runSplit : mode === "simple" ? runSimple : runDefault;
+    const run =
+      mode === "like-discord"
+        ? runLikeDiscord
+        : mode === "split"
+        ? runSplit
+        : mode === "simple"
+        ? runSimple
+        : runDefault;
     const { text, dt } = await run(client);
     console.log(`[sidecar] ✓ done in ${dt}ms`);
     console.log("---");
