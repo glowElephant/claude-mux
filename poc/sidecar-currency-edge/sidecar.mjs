@@ -28,10 +28,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const DRY = process.env.MUX_SIDECAR_DRY === "1";
 /**
- * SIMPLE=1: discord_bot 패턴 prompt 우회 — D 통합 테스트와 같은 단순 prompt만 보냄.
- * stall이 prompt 패턴 영향인지 muxd 자체 영향인지 분리 진단용.
+ * 모드:
+ *   default: discord_bot 멀티섹션 패턴 그대로 (stall 재현용)
+ *   SIMPLE=1: 단순 prompt 단발 (muxd 자체 정상 동작 확인용)
+ *   SPLIT=1: 분리 패턴 — openSession + 컨텍스트 send + 질문 send (F-1 본 검증)
  */
 const SIMPLE = process.env.MUX_SIDECAR_SIMPLE === "1";
+const SPLIT = process.env.MUX_SIDECAR_SPLIT === "1";
 const QUESTION =
   process.env.MUX_SIDECAR_QUESTION ??
   "respond with exactly one line: 'OK-SIDECAR-CURRENCY-EDGE'";
@@ -51,40 +54,108 @@ const FULL_PROMPT = SIMPLE
       `\n## 사용자 질문\n${QUESTION}\n\n2000자 이내로 답해.`,
     ].join("\n");
 
+async function runDefault(client) {
+  console.log(`[sidecar:default] prompt length: ${FULL_PROMPT.length} chars`);
+  const t0 = Date.now();
+  const text = await client.ask(FULL_PROMPT, {
+    cwd: __dirname,
+    invoker: "currency-edge-sidecar-poc",
+    mode: "automation",
+    idleDeathMs: 180_000,
+    maxMs: 240_000,
+    detectFailure: true,
+  });
+  return { text, dt: Date.now() - t0 };
+}
+
+async function runSimple(client) {
+  console.log(`[sidecar:simple] prompt length: ${FULL_PROMPT.length} chars`);
+  const t0 = Date.now();
+  const text = await client.ask(FULL_PROMPT, {
+    cwd: __dirname,
+    invoker: "currency-edge-sidecar-poc",
+    mode: "automation",
+    idleDeathMs: 180_000,
+    maxMs: 240_000,
+    detectFailure: true,
+  });
+  return { text, dt: Date.now() - t0 };
+}
+
+/**
+ * SPLIT 패턴 — discord_bot의 멀티섹션 prompt를 두 번의 send로 분리.
+ *   1. openSession (mode=automation, invoker=...) — system context 자동 주입
+ *   2. send(컨텍스트) — flat text, markdown 헤더 없음
+ *   3. send(질문) — 짧게
+ *   4. close
+ *
+ * 봇 한도 = 2 round-trip (~30~40s 예상).
+ */
+async function runSplit(client) {
+  // K-1: 금융/숫자/특수문자 완전 제거. 가설 검증 — 그게 stall 원인인지.
+  console.log(`[sidecar:split] minimal plain-english (K-1)`);
+  const t0 = Date.now();
+  const sess = await client.openSession({
+    cwd: __dirname,
+    invoker: "currency-edge-discord-bot",
+    mode: "automation",
+  });
+  try {
+    const msg1 = `Bot is running. Reply with exactly 'noted' and nothing else.`;
+    console.log(`[sidecar:split] msg 1 (${msg1.length} chars): ${msg1}`);
+    const ack = await sess.send(msg1, {
+      idleDeathMs: 240_000,
+      maxMs: 300_000,
+      detectFailure: true,
+    });
+    const dt1 = Date.now() - t0;
+    console.log(`[sidecar:split] ✓ msg 1 (${dt1}ms): ${ack.slice(0, 80)}`);
+
+    const t1 = Date.now();
+    const msg2 = `Given that bot status, ${QUESTION}`;
+    console.log(`[sidecar:split] msg 2 (${msg2.length} chars): ${msg2}`);
+    const reply = await sess.send(msg2, {
+      idleDeathMs: 240_000,
+      maxMs: 300_000,
+      detectFailure: true,
+    });
+    const dt2 = Date.now() - t1;
+    console.log(`[sidecar:split] ✓ msg 2 (${dt2}ms)`);
+    return { text: reply, dt: Date.now() - t0 };
+  } finally {
+    await sess.close().catch(() => {});
+  }
+}
+
 async function main() {
   console.log("[sidecar] PoC start");
-  console.log(`[sidecar] DRY=${DRY}`);
-  console.log(`[sidecar] prompt length: ${FULL_PROMPT.length} chars`);
+  const mode = SPLIT ? "split" : SIMPLE ? "simple" : "default";
+  console.log(`[sidecar] mode: ${mode}`);
+  console.log(`[sidecar] DRY: ${DRY}`);
 
   if (DRY) {
     console.log("[sidecar] DRY mode — skipping real claude call");
-    console.log("[sidecar] prompt preview (first 200 chars):");
-    console.log(FULL_PROMPT.slice(0, 200) + "...");
+    if (mode === "split") {
+      console.log(`[sidecar] split would send 2 messages:`);
+      console.log(`  1) context (~60 chars)`);
+      console.log(`  2) question (~${QUESTION.length} chars)`);
+    } else {
+      console.log("[sidecar] prompt preview (first 200 chars):");
+      console.log(FULL_PROMPT.slice(0, 200) + "...");
+    }
     return;
   }
 
-  const client = new Client({
-    // autoSpawn=true 기본 — 데몬 없으면 자동 띄움
-  });
-
-  const t0 = Date.now();
+  const client = new Client({});
   try {
-    const text = await client.ask(FULL_PROMPT, {
-      cwd: __dirname, // 일부러 PoC 폴더 — currency-edge jsonl 디렉토리에 새 파일 안 만듦
-      invoker: "currency-edge-sidecar-poc",
-      mode: "automation",
-      idleDeathMs: 180_000, // v0.1.4: 긴 prompt 대응 60s → 180s
-      maxMs: 240_000,
-      detectFailure: true, // 자연어 거부 표현이면 BlockedError throw
-    });
-    const dt = Date.now() - t0;
-    console.log(`[sidecar] ✓ response (${dt}ms):`);
+    const run = mode === "split" ? runSplit : mode === "simple" ? runSimple : runDefault;
+    const { text, dt } = await run(client);
+    console.log(`[sidecar] ✓ done in ${dt}ms`);
     console.log("---");
     console.log(text);
     console.log("---");
   } catch (err) {
-    const dt = Date.now() - t0;
-    console.error(`[sidecar] ✗ failed after ${dt}ms:`, err.message);
+    console.error(`[sidecar] ✗ failed:`, err.message);
     if (err.code === "BLOCKED") {
       console.error(`[sidecar]   blocked reason: ${err.reason}`);
     }
