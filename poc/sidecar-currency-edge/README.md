@@ -96,7 +96,7 @@ prompt 패턴을 좁히기 위해 5가지 모드를 차례로 시도. 봇 한도
 - ❌ **금융 텍스트 + 멀티섹션** (discord_bot 원본 패턴) — 위와 같은 원인
 - ❌ **`##` 마크다운 헤더 multi-section**
 
-### v0.2.0 마이그레이션에 사용할 패턴
+### v0.2.0 마이그레이션에 사용할 패턴 (가설)
 
 ```python
 # Python 측 prompt 구성 — 매 호출이 standalone 명령형
@@ -108,4 +108,48 @@ result = client.ask(prompt, cwd=..., mode="automation", idle_death_ms=120_000)
 - referential prefix 없음 ("Given", "Based on" 등 금지)
 - 마지막에 명확한 액션 동사 + 출력 형식
 - 길이 < 200자 권장 (안전 마진)
+
+⚠️ **본 패턴은 currency-edge 실제 prompt에서 추가 검증 필요** (아래 like-discord 결과 참조).
+
+---
+
+## L-2 검증 — discord_bot 패턴 직접 시도
+
+`MUX_SIDECAR_LIKE_DISCORD=1` 모드로 currency-edge `discord_bot._build_muxd_prompt`와
+동일한 형식의 prompt를 사이드카에서 실행.
+
+```
+환율 봇 어시스턴트로서 답해. 봇 상태: Slot 0: USD/KRW @ 1380.50 (running 12m) P/L: +0.03%.
+사용자 질문: respond with exactly one line: 'OK-SIDECAR-CURRENCY-EDGE'.
+답을 한국어로 1900자 이내 한 문단으로 작성해.
+```
+
+| 항목 | 값 |
+|---|---|
+| 길이 | 171자 (PoC 권장 < 200자 안) |
+| 모드 | automation |
+| 패턴 | standalone imperative inline (referential prefix 없음) |
+| 결과 | ❌ **120s idle stall** |
+
+### 분석 — 봇 상태 inline이 핵심 stall 원인 가능성
+
+K-1 통과 패턴(60자): `"Bot is running. Reply with exactly 'noted' and nothing else."`
+- ✅ 영어 + 금융 텍스트 없음 + 단일 명령
+- 통과 11.3초
+
+like-discord 실패(171자):
+- ❌ 한국어/영어 혼합 + **봇 상태 inline** (`USD/KRW @ 1380.50`)
+
+차이점은 봇 상태 + 통화/숫자/특수문자(`@`, `:`, `/`, `%`) 조합. F-1 단계에서도 같은
+종류의 prompt가 stall했음.
+
+### currency-edge 마이그레이션 함의
+
+discord_bot의 실제 운영 prompt는 봇 상태 정보(환율/슬롯/P&L) 없이는 의미 있는 답변
+어려움. 그게 들어가면 muxd에서 stall.
+
+**현재 권장**:
+- USE_MUXD=1 활성화 보류
+- 모델 stall 우회 방법 추가 연구 (#13, #3)
+- 인프라(USE_MUXD 토글)는 머지 완료 — 미래 활성화 준비됨
 
