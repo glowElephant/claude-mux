@@ -21,7 +21,10 @@
  */
 
 import { Client } from "@claude-mux/client";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -36,6 +39,7 @@ const DRY = process.env.MUX_SIDECAR_DRY === "1";
 const SIMPLE = process.env.MUX_SIDECAR_SIMPLE === "1";
 const SPLIT = process.env.MUX_SIDECAR_SPLIT === "1";
 const LIKE_DISCORD = process.env.MUX_SIDECAR_LIKE_DISCORD === "1";
+const FILE_REF = process.env.MUX_SIDECAR_FILE_REF === "1";
 const QUESTION =
   process.env.MUX_SIDECAR_QUESTION ??
   "respond with exactly one line: 'OK-SIDECAR-CURRENCY-EDGE'";
@@ -67,6 +71,51 @@ async function runDefault(client) {
     detectFailure: true,
   });
   return { text, dt: Date.now() - t0 };
+}
+
+/**
+ * FILE_REF 모드 — 사용자 제안 우회 패턴.
+ * 봇 상태 + 질문을 임시 파일에 쓰고, prompt에는 짧은 "Read X and answer" 명령만.
+ *
+ * 가설: stall 핵심 원인 = prompt에 봇 상태/금융 텍스트 포함.
+ * 우회: 파일에 넣고 Read 도구로 모델이 직접 가져가게.
+ * allowedTools="Read"로 automation 모드에서도 Read 허용.
+ */
+async function runFileRef(client) {
+  // O-2: 컨텍스트 자연어화 — 특수문자(@, /, %, :) 모두 제거.
+  // 가설: 봇 상태에 금융 표기 특수문자가 모델 응답 stall 유발.
+  const ctxPath = path.join(__dirname, "ctx.txt");
+  const fileBody =
+    "Currency bot context\n" +
+    "Bot is running on slot zero. Exchange rate is 1380 won 50 cents. " +
+    "Running for 12 minutes. Profit and loss is 0.03 percent.\n\n" +
+    "User question\n" +
+    "Reply with one short line summarizing the bot status.\n";
+  fs.writeFileSync(ctxPath, fileBody, "utf8");
+
+  const prompt = `Read ctx.txt and reply briefly.`;
+  console.log(`[sidecar:file-ref] ctx file: ${ctxPath}`);
+  console.log(`[sidecar:file-ref] ctx body length: ${fileBody.length} chars`);
+  console.log(`[sidecar:file-ref] prompt length: ${prompt.length} chars`);
+  console.log(`[sidecar:file-ref] prompt: ${prompt}`);
+
+  const t0 = Date.now();
+  try {
+    const text = await client.ask(prompt, {
+      cwd: __dirname,
+      invoker: "currency-edge-file-ref-poc",
+      mode: "automation",
+      allowedTools: "Read",
+      idleDeathMs: 120_000,
+      maxMs: 180_000,
+      detectFailure: true,
+    });
+    return { text, dt: Date.now() - t0 };
+  } finally {
+    try {
+      fs.unlinkSync(ctxPath);
+    } catch {}
+  }
 }
 
 /**
@@ -155,7 +204,9 @@ async function runSplit(client) {
 
 async function main() {
   console.log("[sidecar] PoC start");
-  const mode = LIKE_DISCORD
+  const mode = FILE_REF
+    ? "file-ref"
+    : LIKE_DISCORD
     ? "like-discord"
     : SPLIT
     ? "split"
@@ -167,7 +218,16 @@ async function main() {
 
   if (DRY) {
     console.log("[sidecar] DRY mode — skipping real claude call");
-    if (mode === "like-discord") {
+    if (mode === "file-ref") {
+      const previewPath = path.join(__dirname, "ctx.txt");
+      const fileBody =
+        "# Currency bot context\n" + FAKE_CONTEXT + "\n\n# User question\n" + QUESTION + "\n";
+      const previewPrompt = "Read ctx.txt and reply briefly.";
+      console.log(`[sidecar:file-ref] would write ctx file: ${previewPath}`);
+      console.log(`[sidecar:file-ref] ctx body length: ${fileBody.length} chars`);
+      console.log(`[sidecar:file-ref] prompt length: ${previewPrompt.length} chars`);
+      console.log(`[sidecar:file-ref] prompt: ${previewPrompt}`);
+    } else if (mode === "like-discord") {
       const ctxOneline = FAKE_CONTEXT.split("\n").map(s => s.trim()).filter(Boolean).join(" ");
       const previewPrompt =
         "환율 봇 어시스턴트로서 답해." +
@@ -191,7 +251,9 @@ async function main() {
   const client = new Client({});
   try {
     const run =
-      mode === "like-discord"
+      mode === "file-ref"
+        ? runFileRef
+        : mode === "like-discord"
         ? runLikeDiscord
         : mode === "split"
         ? runSplit

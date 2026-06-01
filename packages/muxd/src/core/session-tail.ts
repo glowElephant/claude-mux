@@ -201,7 +201,9 @@ export class SessionTail extends EventEmitter {
         const toolBlocks = extractToolUseBlocks(obj);
         for (const tb of toolBlocks) this.emit("toolUse", tb, obj);
         if (text) this.emit("assistant", text, obj);
-        if (obj.message.stop_reason) this.emit("done", text, obj);
+        if (shouldEmitDone(obj.message.stop_reason)) {
+          this.emit("done", text, obj);
+        }
       }
     }
   }
@@ -226,6 +228,23 @@ export function extractAssistantText(msg: JsonlMessage): string {
     }
   }
   return parts.join("");
+}
+
+/**
+ * stop_reason 값이 "응답 완료"를 의미하는지 판정.
+ *
+ * - `end_turn` / `stop_sequence` / `max_tokens`: 모델이 답변을 마침 → done
+ * - `tool_use`: 모델이 도구를 호출함. 도구 결과 받고 모델이 응답을 이어가므로
+ *   여기서 done emit하면 호출자가 빈 응답으로 종료 처리됨 (v0.1.5까지의 버그).
+ *   다음 assistant 메시지가 진짜 응답 — 그때 done.
+ * - `null`/`undefined`/그 외: 진행 중 (응답 아직 끝나지 않음)
+ */
+export function shouldEmitDone(stopReason: string | null | undefined): boolean {
+  return (
+    stopReason === "end_turn" ||
+    stopReason === "stop_sequence" ||
+    stopReason === "max_tokens"
+  );
 }
 
 export function extractToolUseBlocks(

@@ -3,6 +3,7 @@ import {
   encodeProjectDir,
   extractAssistantText,
   extractToolUseBlocks,
+  shouldEmitDone,
   type JsonlMessage,
 } from "./session-tail.js";
 
@@ -62,6 +63,30 @@ describe("extractAssistantText", () => {
   it("returns empty when no content", () => {
     const msg: JsonlMessage = { type: "assistant", message: {} };
     expect(extractAssistantText(msg)).toBe("");
+  });
+});
+
+describe("shouldEmitDone (v0.1.6 fix)", () => {
+  it.each(["end_turn", "stop_sequence", "max_tokens"] as const)(
+    "returns true for %s (response really finished)",
+    (sr) => {
+      expect(shouldEmitDone(sr)).toBe(true);
+    },
+  );
+
+  it("returns false for tool_use (model will continue after tool result)", () => {
+    // v0.1.5까지 버그: tool_use도 done 처리 → 호출자에 빈 응답 반환
+    expect(shouldEmitDone("tool_use")).toBe(false);
+  });
+
+  it("returns false for null/undefined (response still in progress)", () => {
+    expect(shouldEmitDone(null)).toBe(false);
+    expect(shouldEmitDone(undefined)).toBe(false);
+  });
+
+  it("returns false for unknown stop_reason values", () => {
+    expect(shouldEmitDone("some_future_reason")).toBe(false);
+    expect(shouldEmitDone("")).toBe(false);
   });
 });
 

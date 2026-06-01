@@ -2,6 +2,31 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.6] — 2026-06-01
+
+### Fixed — **결정적 버그**: `tool_use` stop_reason도 응답 완료로 처리되던 문제
+v0.1.5까지 `session-tail`이 어떤 `stop_reason` 값이든 done emit → 모델이 도구만 호출했는데 muxd가 "응답 끝났다" 판단 → 호출자에 **빈 응답 즉시 반환**. 모델이 도구 결과를 받고 응답을 이어가도 muxd는 이미 떠난 뒤라 그 응답 못 받음.
+
+이게 currency-edge 마이그레이션 PoC에서 `allowedTools` 사용 시 "응답 0초 만에 빈 문자열"로 보이던 원인이자, F-1/L-2 단계에서 "stall"로 잘못 진단했던 케이스의 진짜 원인.
+
+**수정**: `shouldEmitDone(stopReason)` 헬퍼 분리 — `end_turn` / `stop_sequence` / `max_tokens` 만 진짜 완료로 인정. `tool_use`는 다음 assistant 라인 대기.
+
+### Added
+- `shouldEmitDone` export (`core/session-tail.ts`) — stop_reason 판정 헬퍼.
+- 단위 테스트 102 통과 (이전 96 + shouldEmitDone 7 케이스 추가).
+
+### Tests
+- 기존 단위 + 통합 5개 영향 없음 (모두 도구 사용 없는 케이스 — `end_turn` 정상 처리).
+- file-ref 사이드카 PoC (`MUX_SIDECAR_FILE_REF=1`): 17.1초 만에 한국어 자연 응답, 봇 상태(환율/슬롯/P&L 특수문자 포함) 정확 인용.
+
+### currency-edge 마이그레이션 함의 (#3)
+- **prompt 단순화/금융 텍스트 제거 등 우회 시도는 사실 불필요**했음. 진짜 원인이 muxd 버그라서.
+- file-ref 패턴 + `allowedTools="Read"` 조합으로 마이그레이션 길 열림. PoC README에 권장 패턴 코드.
+
+### Deferred (변경 없음)
+- 모델 자율 약속어 트리거 → **#13**
+- discord_bot / run_optimizer / watchdog 실제 USE_MUXD=1 활성화 → 사용자 결정
+
 ## [0.1.5] — 2026-06-01
 
 ### Added — `packages/client-py` Python sync 클라이언트
