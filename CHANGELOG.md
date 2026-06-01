@@ -2,6 +2,39 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.7] — 2026-06-01
+
+### Added — 디버그 모드 (PTY 출력 라이브 관찰)
+- 환경변수 `MUXD_DEBUG=1`로 daemon 디버그 활성화 — 각 세션의 PTY 출력을 ring buffer(기본 500줄)에 저장 + subscriber에 broadcast.
+- JSON-RPC method:
+  - `mux.debugList` → 활성/종료 세션 목록 (`debug`, `sessions[]`)
+  - `mux.debugSubscribe({sessionId})` → ring buffer 즉시 반환 + 이후 `mux.debugChunk` / `mux.debugClose` notification으로 라이브 stream
+- muxd CLI 새 서브커맨드:
+  - `muxd debug list` — 활성/종료 세션 목록 (id, invoker, mode, age, ringLines)
+  - `muxd debug view <sessionId>` — 그 세션의 ring + 라이브 PTY 출력을 현재 터미널에 stream (Ctrl+C로 종료)
+- 의존성 / HTML / 빌드 0 — Node built-in `net` 모듈 + JSON-RPC NDJSON 그대로 활용.
+
+### 사용 예시
+```bash
+# 디버그 모드 데몬 (포어그라운드)
+$ MUXD_DEBUG=1 muxd serve
+
+# 다른 터미널 — 세션 목록
+$ muxd debug list
+[alive] f4e21a8b  currency-edge-discord-bot   automation  12s  ring=87
+         cwd: C:\Git\currency-edge
+
+# 또 다른 터미널 — 그 세션 PTY 라이브 stream
+$ muxd debug view f4e21a8b
+... (ring 누적분 출력 후 --- live --- 이후 실시간)
+```
+
+여러 세션 동시 보기 — cmd 창 여러 개 띄우고 각각 `muxd debug view <다른id>`. Windows taskbar로 스위칭.
+
+### Unchanged
+- 단위 102 통과 (디버그 라우팅은 server.test의 method-not-found 테스트가 cover — 모르는 method면 throw 확인).
+- 통합 5 회귀 없음 (디버그 OFF가 기본).
+
 ## [0.1.6] — 2026-06-01
 
 ### Fixed — **결정적 버그**: `tool_use` stop_reason도 응답 완료로 처리되던 문제
