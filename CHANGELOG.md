@@ -2,6 +2,40 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.5] — 2026-06-01
+
+### Added — `packages/client-py` Python sync 클라이언트
+- `claude-mux` PyPI 패키지 (`pip install claude-mux`), Python 3.9+ 지원.
+- **Sync API** — `currency-edge`의 `subprocess.run(["claude", "-p", ...])` 패턴 그대로 대체:
+  - `Client.ask(prompt, cwd, mode="automation", idle_death_ms=...)` → str
+  - `Client.open_session(cwd, mode)` + `Session.send(prompt) / close()` — 재사용 세션 (컨텍스트 유지)
+  - `Client.stream(prompt, cwd, on_chunk)` — 청크 콜백 (v0.1.x는 응답 단위 한 청크)
+  - `Client.status()` — 데몬 정보
+- **`BlockedError` / `MuxClientError`** — TS client errors와 인터페이스 호환. `code`, `reason`, `raw_reply`, `session_id` 필드 동일.
+- **Transport**:
+  - POSIX: `socket.socket(AF_UNIX)` stdlib만 사용
+  - Windows: `pywin32` (`win32file.CreateFile`) 로 Named pipe 직접 처리
+- **Auto-spawn**: 데몬 없으면 `muxd serve` detached spawn 후 ready 폴링 (`MUXD_BIN` env 또는 PATH lookup).
+- **NDJSON framing + JSON-RPC 2.0** — TS daemon protocol과 100% 호환.
+
+### Tests
+- 단위 **14 통과** (POSIX 2 skip on Windows).
+  - errors: `BlockedError` 필드, RPC 코드 매핑 (1010 → BLOCKED, 1001~1021 매핑, 9999 → RPC_ERROR)
+  - socket_path: 플랫폼별 path 결정
+- 통합 **2 통과** (`MUX_INTEGRATION=1`, real claude):
+  - status round-trip (PTY 없이 daemon만)
+  - ask "respond with exactly: OK-PY-CLIENT" → 11.68s 정확 응답
+
+### F-1 PoC 보고서 (#3)
+사이드카로 5+가지 prompt 패턴 시도 후 **마이그레이션 패턴 확정** — 자세한 내용 `poc/sidecar-currency-edge/README.md`:
+- ✅ standalone imperative ("Reply with X")
+- ❌ referential prefix ("Given that ...", "Based on ...") — automation 룰 "Don't ask clarifying"과 충돌
+- v0.2.0 마이그레이션에선 컨텍스트를 inline + 마지막에 명확한 액션 동사 패턴 사용.
+
+### Deferred (변경 없음)
+- discord_bot / run_optimizer / watchdog / vidfolio 실제 마이그레이션 → **v0.2.0**
+- 약속어 자율 트리거 → **#13**
+
 ## [0.1.4] — 2026-06-01
 
 ### Changed
